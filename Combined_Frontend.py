@@ -140,10 +140,21 @@ def tab_rsi(prefix, title):
         st.warning("No data from API"); return
     show_ts(str(rsi_data.get("timestamp", "")))
     df_rsi  = pd.DataFrame(rsi_data.get("data", []))
-    df_obos = pd.DataFrame(obos_data.get("data", []))
     if df_rsi.empty:
         st.info("Engine warming up…"); return
-    df = pd.merge(df_rsi, df_obos[["symbol", "timeframe", "ob_os"]], on=["symbol", "timeframe"], how="left")
+    # df_rsi already contains 'ob_os' from the backend — merging with df_obos
+    # creates duplicate columns (ob_os_x / ob_os_y) that break the rename below.
+    # Use df_rsi directly; fall back to df_obos only if ob_os is somehow missing.
+    if "ob_os" not in df_rsi.columns:
+        df_obos = pd.DataFrame(obos_data.get("data", []))
+        if not df_obos.empty:
+            df_rsi = pd.merge(
+                df_rsi,
+                df_obos[["symbol", "timeframe", "ob_os"]],
+                on=["symbol", "timeframe"],
+                how="left",
+            )
+    df = df_rsi.copy()
     df.drop(columns=[c for c in ["Adjusted_RSI"] if c in df.columns], inplace=True)
     df = df.rename(columns={"symbol": "Symbol", "timeframe": "Timeframe", "ob_os": "Overbought/Oversold"})
     keep = [c for c in ["Symbol", "Timeframe", "RSI", "Overbought/Oversold"] if c in df.columns]
