@@ -323,14 +323,14 @@ MA_THRESHOLD = 0.00015   # relative-difference threshold for signal generation
 
 
 def _ma_signal(s21, sma_x):
-    """Return +1, -1, or 0 based on directional proximity of SMA21 to SMAx."""
+    """Return +1, -1, or 'NA' based on directional proximity of SMA21 to SMAx."""
     if pd.isna(s21) or pd.isna(sma_x) or sma_x == 0:
-        return 0
+        return "NA"
     diff        = s21 - sma_x
     abs_rel_diff = abs(diff / sma_x)
     if abs_rel_diff < MA_THRESHOLD:
         return 1 if diff > 0 else -1
-    return 0
+    return "NA"
 
 
 def _get_ma_signals(symbols):
@@ -343,12 +343,12 @@ def _get_ma_signals(symbols):
             rates = mt5.copy_rates_from_pos(sym, tf, 0, MA_CANDLES + 1)
             if rates is None or len(rates) < MA_CANDLES:
                 results.append({
-                    "Symbol":    sym,
-                    "Timeframe": tf_name,
-                    "SMA50_Signal":  0,
-                    "SMA100_Signal": 0,
-                    "SMA200_Signal": 0,
-                    "Error":     "Insufficient Data",
+                    "Symbol":        sym,
+                    "Timeframe":     tf_name,
+                    "SMA50_Signal":  "NA",
+                    "SMA100_Signal": "NA",
+                    "SMA200_Signal": "NA",
+                    "Error":         "Insufficient Data",
                 })
                 continue
             df = pd.DataFrame(rates)
