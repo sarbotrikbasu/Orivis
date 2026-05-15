@@ -203,16 +203,22 @@ def tab_ma(prefix, title):
     df = pd.DataFrame(rows)
     if "Symbol" in df.columns:
         df["Symbol"] = df["Symbol"].str.replace("m", "", regex=False)
-    # Replace any leftover numeric 0 with "NA" for clarity
-    for col in ["SMA50_Signal", "SMA100_Signal", "SMA200_Signal"]:
-        if col in df.columns:
-            df[col] = df[col].apply(lambda v: "NA" if v == 0 else v)
-    keep = [c for c in ["Symbol", "Timeframe", "SMA50_Signal", "SMA100_Signal", "SMA200_Signal"] if c in df.columns]
-    df = df[keep].rename(columns={
-        "SMA50_Signal":  "vs SMA50",
-        "SMA100_Signal": "vs SMA100",
-        "SMA200_Signal": "vs SMA200",
-    }).sort_values(["Symbol", "Timeframe"])
+
+    # Support both old backend (SMA50/100/200) and new backend (SMA50_Signal/...)
+    col_map = {}
+    for short, full in [("SMA50", "SMA50_Signal"), ("SMA100", "SMA100_Signal"), ("SMA200", "SMA200_Signal")]:
+        if full in df.columns:
+            col_map[full] = f"vs {short}"
+        elif short in df.columns:
+            col_map[short] = f"vs {short}"
+
+    # Replace any numeric 0 with "NA" for clarity
+    for col in col_map:
+        df[col] = df[col].apply(lambda v: "NA" if v == 0 else v)
+
+    keep = ["Symbol", "Timeframe"] + list(col_map.keys())
+    keep = [c for c in keep if c in df.columns]
+    df = df[keep].rename(columns=col_map).sort_values(["Symbol", "Timeframe"])
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
