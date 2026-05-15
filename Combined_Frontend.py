@@ -203,7 +203,7 @@ def tab_ma(prefix, title):
     df = pd.DataFrame(rows)
     if "Symbol" in df.columns:
         df["Symbol"] = df["Symbol"].str.replace("m", "", regex=False)
-    keep = [c for c in ["Symbol", "Timeframe", "SMA50", "SMA100", "SMA200"] if c in df.columns]
+    keep = [c for c in ["Symbol", "Timeframe", "SMA50_Signal", "SMA100_Signal", "SMA200_Signal"] if c in df.columns]
     df = df[keep].sort_values(["Symbol", "Timeframe"])
     st.dataframe(df, use_container_width=True, hide_index=True)
 

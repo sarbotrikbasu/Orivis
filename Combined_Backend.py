@@ -318,35 +318,56 @@ ma_jpy_stop   = threading.Event()
 ma_jpy_results = []
 
 
+MA_CANDLES = 210          # need at least 200 closed candles for SMA200
+MA_THRESHOLD = 0.00015   # relative-difference threshold for signal generation
+
+
+def _ma_signal(s21, sma_x):
+    """Return +1, -1, or 0 based on directional proximity of SMA21 to SMAx."""
+    if pd.isna(s21) or pd.isna(sma_x) or sma_x == 0:
+        return 0
+    diff        = s21 - sma_x
+    abs_rel_diff = abs(diff / sma_x)
+    if abs_rel_diff < MA_THRESHOLD:
+        return 1 if diff > 0 else -1
+    return 0
+
+
 def _get_ma_signals(symbols):
     results = []
     for sym in symbols:
         for tf_name, tf in TF_DICT.items():
             if not mt5.symbol_select(sym, True):
                 continue
-            rates = mt5.copy_rates_from_pos(sym, tf, 0, 250)
-            if rates is None or len(rates) == 0:
-                results.append({"Symbol": sym, "Timeframe": tf_name, "SMA50": -1, "SMA100": -1, "SMA200": -1, "Error": "No Data"})
+            # Fetch one extra candle so iloc[-2] is the latest *closed* candle
+            rates = mt5.copy_rates_from_pos(sym, tf, 0, MA_CANDLES + 1)
+            if rates is None or len(rates) < MA_CANDLES:
+                results.append({
+                    "Symbol":    sym,
+                    "Timeframe": tf_name,
+                    "SMA50_Signal":  0,
+                    "SMA100_Signal": 0,
+                    "SMA200_Signal": 0,
+                    "Error":     "Insufficient Data",
+                })
                 continue
             df = pd.DataFrame(rates)
-            df["time"] = pd.to_datetime(df["time"], unit="s")
+            df["time"]   = pd.to_datetime(df["time"], unit="s")
             df["SMA21"]  = df["close"].rolling(21).mean()
             df["SMA50"]  = df["close"].rolling(50).mean()
             df["SMA100"] = df["close"].rolling(100).mean()
             df["SMA200"] = df["close"].rolling(200).mean()
-            latest = df.iloc[-1]
-            def chk(s21, st):
-                if s21 == 0 or pd.isna(s21) or pd.isna(st): return 0
-                return 1 if abs((s21 - st) / s21) <= 0.001 else 0
-            s21 = latest["SMA21"]
+            # Use the latest *closed* candle (second-to-last row)
+            closed = df.iloc[-2]
+            s21 = closed["SMA21"]
             results.append({
-                "Symbol":     sym,
-                "Timeframe":  tf_name,
-                "SMA50":      chk(s21, latest["SMA50"]),
-                "SMA100":     chk(s21, latest["SMA100"]),
-                "SMA200":     chk(s21, latest["SMA200"]),
-                "Last Close": round(latest["close"], 5),
-                "Time":       latest["time"].strftime("%Y-%m-%d %H:%M"),
+                "Symbol":        sym,
+                "Timeframe":     tf_name,
+                "SMA50_Signal":  _ma_signal(s21, closed["SMA50"]),
+                "SMA100_Signal": _ma_signal(s21, closed["SMA100"]),
+                "SMA200_Signal": _ma_signal(s21, closed["SMA200"]),
+                "Last Close":    round(float(closed["close"]), 5),
+                "Time":          closed["time"].strftime("%Y-%m-%d %H:%M"),
             })
     return results
 
