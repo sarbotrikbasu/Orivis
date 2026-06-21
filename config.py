@@ -44,6 +44,18 @@ DEFAULT_LOGIN = get_env("MT5_LOGIN", "128074421")
 DEFAULT_PASSWORD = get_env("MT5_PASSWORD", "Pradip1999@")
 DEFAULT_SERVER = get_env("MT5_SERVER", "Exness-MT5Real7")
 
+BASE_URL = get_env("ORIVIS_BASE_URL", "http://217.154.154.252:8000").rstrip("/")
+COMBINED_API_URL = get_env("COMBINED_API_URL", BASE_URL).rstrip("/")
+
+ROUTE_MAP = {
+    "/health": f"{BASE_URL}/health",
+    "/fib/signal": f"{BASE_URL}/fib/signal",
+    "/rsi/rsi": f"{BASE_URL}/rsi/rsi",
+    "/rsi/rsi-ob-os": f"{BASE_URL}/rsi/rsi-ob-os",
+    "/ma/signals": f"{BASE_URL}/ma/signals",
+    "/probability/score": f"{BASE_URL}/probability/score",
+}
+
 FIB_GEN_SYMBOLS = parse_comma_list(
     "FIB_GEN_SYMBOLS",
     "EURUSDm,GBPUSDm,USDCHFm,EURGBPm,EURCHFm,GBPCHFm"
