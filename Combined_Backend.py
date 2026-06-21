@@ -20,7 +20,6 @@ from config import (
     DEFAULT_SERVER,
     FIB_GEN_SYMBOLS,
     FIB_JPY_SYMBOLS,
-    TIMEFRAMES as ENV_TIMEFRAMES,
     FIB_KEYS as CONFIG_FIB_KEYS,
 )
 
@@ -28,23 +27,7 @@ from config import (
 # GLOBAL CONFIG
 # ==============================================================
 
-FIB_GEN_SYMS = FIB_GEN_SYMBOLS
-FIB_JPY_SYMS = FIB_JPY_SYMBOLS
-
-ALL_SYMBOLS = list(set(FIB_GEN_SYMS + FIB_JPY_SYMS))
-
-TIMEFRAME_MAP = {
-    "5m": mt5.TIMEFRAME_M5,
-    "15m": mt5.TIMEFRAME_M15,
-    "1h": mt5.TIMEFRAME_H1,
-    "1d": mt5.TIMEFRAME_D1,
-}
-
-TF_DICT = {
-    k: TIMEFRAME_MAP[k]
-    for k in ENV_TIMEFRAMES
-    if k in TIMEFRAME_MAP
-}
+ALL_SYMBOLS = list(set(FIB_GEN_SYMBOLS + FIB_JPY_SYMBOLS))
 
 FIB_KEYS = CONFIG_FIB_KEYS
 
@@ -53,9 +36,6 @@ HISTORY_CANDLES = 56
 
 RSI_OVERBOUGHT = 80
 RSI_OVERSOLD = 20
-
-SMA_PERIOD = 20
-LOOKBACK_CANDLES = 200
 
 UPDATE_INTERVAL = 120
 
@@ -80,11 +60,9 @@ _mt5_lock = threading.Lock()
 
 
 def initialize_mt5():
-
     global _mt5_initialized
 
     with _mt5_lock:
-
         if _mt5_initialized:
             return
 
@@ -100,23 +78,18 @@ def initialize_mt5():
             raise RuntimeError("MT5 login failed")
 
         for sym in ALL_SYMBOLS:
-
             if not mt5.symbol_select(sym, True):
                 print(f"WARNING: could not select {sym}")
 
         _mt5_initialized = True
-
         print("✅ MT5 initialized successfully")
 
 
 def ensure_mt5():
-
     global _mt5_initialized
 
     if not mt5.terminal_info():
-
         _mt5_initialized = False
-
         initialize_mt5()
 
 
@@ -124,17 +97,12 @@ def ensure_mt5():
 # FIB ENGINE
 # ==============================================================
 
-fib_gen_lock = threading.Lock()
-fib_gen_stop = threading.Event()
-fib_gen_output = {"timestamp": None, "table": []}
-
-fib_jpy_lock = threading.Lock()
-fib_jpy_stop = threading.Event()
-fib_jpy_output = {"timestamp": None, "table": []}
+fib_lock = threading.Lock()
+fib_stop = threading.Event()
+fib_output = {"timestamp": None, "table": []}
 
 
 def _calc_fib(symbol, timeframe):
-
     latest = mt5.copy_rates_from_pos(symbol, timeframe, 0, 2)
 
     if latest is None or len(latest) < 2:
@@ -179,12 +147,10 @@ def _calc_fib(symbol, timeframe):
     df["isRedLocal"] = False
 
     for i in range(1, len(df)):
-
         X = df.loc[i, "X"]
         pm = df.loc[i - 1, "mid"]
 
         if pd.notna(X) and pd.notna(pm):
-
             if (
                 ((X > 0 and pm < 0) or (X < 0 and pm > 0))
                 and abs(X) > abs(pm)
@@ -194,27 +160,19 @@ def _calc_fib(symbol, timeframe):
     ref_tables = {}
 
     for ri in range(len(df) - 1):
-
         rows = []
-
         cv = None
         pm = None
         pc = None
 
         for i in range(ri, len(df)):
-
             ind = df.loc[i, "ind"]
-
             cv = ind if cv is None else cv + ind
-
             mid = cv / 2
-
             red = False
 
             if pm is not None:
-
                 X = cv - pc
-
                 if (
                     ((X > 0 and pm < 0) or (X < 0 and pm > 0))
                     and abs(X) > abs(pm)
@@ -252,7 +210,6 @@ def _calc_fib(symbol, timeframe):
     si = df.index[df["time"] == trend_start][0]
 
     dfa = df.loc[si:].copy()
-
     dfa["cum_from_start"] = dfa["ind"].cumsum()
 
     mi = dfa["cum_from_start"].abs().idxmax()
@@ -263,36 +220,32 @@ def _calc_fib(symbol, timeframe):
         else "Downtrend"
     )
 
+    # Added Fib0 and Fib6 for identifying (n-1) and (n+1) price levels
     ratios = {
+        "Fib0": 0.0,
         "Fib1": 0.236,
         "Fib2": 0.382,
         "Fib3": 0.5,
         "Fib4": 0.618,
         "Fib5": 0.786,
+        "Fib6": 1.0,
     }
 
     sr = df.loc[si]
     mr = df.loc[mi]
 
     if direction == "Uptrend":
-
         h = mr["high"]
         l = sr["low"]
-
         rng = h - l
-
         levels = {
             k: h - v * rng
             for k, v in ratios.items()
         }
-
     else:
-
         h = sr["high"]
         l = mr["low"]
-
         rng = h - l
-
         levels = {
             k: l + v * rng
             for k, v in ratios.items()
@@ -303,13 +256,14 @@ def _calc_fib(symbol, timeframe):
     n2 = df.iloc[-3]
     n1 = df.iloc[-2]
 
+    # Find closest level among Fib1 to Fib5 only
+    signal_levels = {k: levels[k] for k in FIB_KEYS}
     fn, fp = min(
-        levels.items(),
+        signal_levels.items(),
         key=lambda x: abs(n2["close"] - x[1])
     )
 
     if direction == "Uptrend":
-
         if (
             n2["close"] < n2["open"]
             and abs(n2["close"] - fp) <= 0.0004 * fp
@@ -317,9 +271,7 @@ def _calc_fib(symbol, timeframe):
             and n1["close"] > n2["close"]
         ):
             sig[fn] = 1
-
     else:
-
         if (
             n2["close"] > n2["open"]
             and abs(n2["close"] - fp) <= 0.0004 * fp
@@ -328,57 +280,69 @@ def _calc_fib(symbol, timeframe):
         ):
             sig[fn] = 1
 
-    return sig, {
+    info = {
         "TrendStart": str(df.loc[si, "time"]),
         "TrendEnd": str(df.loc[mi, "time"]),
         "TrendDirection": direction,
+        "trade_direction": (
+            "Potential Downside"
+            if direction == "Uptrend"
+            else "Potential Upside"
+        ),
     }
+
+    # If a signal is active for a Fib level n, identify n-1 and n+1 price levels
+    if sig[fn] == 1:
+        n = int(fn.replace("Fib", ""))
+        prev_level_name = f"Fib{n-1}"
+        next_level_name = f"Fib{n+1}"
+
+        info["Fib_n_minus_1_Level"] = prev_level_name
+        info["Fib_n_minus_1_Price"] = round(levels[prev_level_name], 5)
+        info["Fib_n_plus_1_Level"] = next_level_name
+        info["Fib_n_plus_1_Price"] = round(levels[next_level_name], 5)
+        info["SignalLevelPrice"] = round(levels[fn], 5)
+
+        # Standard keys for easy indexing/frontend rendering
+        info[f"{prev_level_name}_Price"] = round(levels[prev_level_name], 5)
+        info[f"{next_level_name}_Price"] = round(levels[next_level_name], 5)
+
+    return sig, info
 
 
 def _fib_engine(symbols, output, lock, stop, label):
-
     print(f"[{label}] started")
+    tf_name = "15m"
+    tf = mt5.TIMEFRAME_M15
 
     while not stop.is_set():
-
         ensure_mt5()
-
         rows = []
 
         for sym in symbols:
-
-            for tf_name, tf in TF_DICT.items():
-
-                try:
-
-                    fib, info = _calc_fib(sym, tf)
-
-                    row = {
-                        "Symbol": sym.replace("m", ""),
-                        "Timeframe": tf_name,
-                        **fib,
-                    }
-
-                    if any(v == 1 for v in fib.values()) and info:
-                        row.update(info)
-
-                except Exception:
-
-                    row = {
-                        "Symbol": sym.replace("m", ""),
-                        "Timeframe": tf_name,
-                        **{k: 0 for k in FIB_KEYS},
-                    }
-
-                rows.append(row)
+            try:
+                fib, info = _calc_fib(sym, tf)
+                row = {
+                    "Symbol": sym.replace("m", ""),
+                    "Timeframe": tf_name,
+                    **fib,
+                }
+                if any(v == 1 for v in fib.values()) and info:
+                    row.update(info)
+            except Exception as e:
+                print(f"[{label}] Error on {sym}: {e}")
+                row = {
+                    "Symbol": sym.replace("m", ""),
+                    "Timeframe": tf_name,
+                    **{k: 0 for k in FIB_KEYS},
+                }
+            rows.append(row)
 
         with lock:
-
             output["timestamp"] = datetime.utcnow().isoformat()
             output["table"] = rows
 
         print(f"[{label}] updated")
-
         stop.wait(UPDATE_INTERVAL)
 
 
@@ -386,19 +350,13 @@ def _fib_engine(symbols, output, lock, stop, label):
 # RSI ENGINE
 # ==============================================================
 
-rsi_gen_lock = threading.Lock()
-rsi_gen_stop = threading.Event()
-rsi_gen_results = []
-rsi_gen_ob_os = []
-
-rsi_jpy_lock = threading.Lock()
-rsi_jpy_stop = threading.Event()
-rsi_jpy_results = []
-rsi_jpy_ob_os = []
+rsi_lock = threading.Lock()
+rsi_stop = threading.Event()
+rsi_results = []
+rsi_ob_os = []
 
 
 def _calc_rsi_array(net_changes):
-
     gains = net_changes[net_changes > 0]
     losses = net_changes[net_changes < 0]
 
@@ -412,9 +370,7 @@ def _calc_rsi_array(net_changes):
 
 
 def _process_rsi_symbol(symbol, timeframe, tf_name):
-
     total = RSI_PERIOD + HISTORY_CANDLES + 1
-
     rates = mt5.copy_rates_from_pos(
         symbol,
         timeframe,
@@ -426,17 +382,14 @@ def _process_rsi_symbol(symbol, timeframe, tf_name):
         return None
 
     df = pd.DataFrame(rates).iloc[:-1]
-
     df["net_pct"] = (
         (df["close"] - df["open"]) / df["open"]
     ) * 100
 
     lw = df.tail(RSI_PERIOD)
-
     nc = lw["net_pct"].values
 
     rsi = _calc_rsi_array(nc)
-
     sd = np.std(nc)
 
     pc = (
@@ -467,315 +420,158 @@ def _process_rsi_symbol(symbol, timeframe, tf_name):
 
 
 def _rsi_engine(symbols, lock, results, ob_os, stop, label):
-
     print(f"[{label}] started")
+    tf_name = "1h"
+    tf = mt5.TIMEFRAME_H1
 
     while not stop.is_set():
-
         ensure_mt5()
-
         tr = []
         to = []
 
         for sym in symbols:
-
-            for tf_name, tf in TF_DICT.items():
-
+            try:
                 rd = _process_rsi_symbol(sym, tf, tf_name)
-
                 if rd:
-
                     tr.append(rd)
-
                     to.append({
                         "symbol": rd["symbol"],
                         "timeframe": rd["timeframe"],
                         "RSI": rd["RSI"],
                         "ob_os": rd["ob_os"],
                     })
+            except Exception as e:
+                print(f"[{label}] Error on {sym}: {e}")
 
         with lock:
-
             results.clear()
             results.extend(tr)
-
             ob_os.clear()
             ob_os.extend(to)
 
         print(f"[{label}] updated")
-
         time.sleep(UPDATE_INTERVAL)
-
-
-# ==============================================================
-# BOLLINGER ENGINE
-# ==============================================================
-
-boll_gen_lock = threading.Lock()
-boll_gen_stop = threading.Event()
-boll_gen_output = {"timestamp": None, "data": {}}
-
-boll_jpy_lock = threading.Lock()
-boll_jpy_stop = threading.Event()
-boll_jpy_output = {"timestamp": None, "data": {}}
-
-
-def _calc_bollinger(symbol, timeframe):
-
-    rates = mt5.copy_rates_from_pos(
-        symbol,
-        timeframe,
-        0,
-        LOOKBACK_CANDLES + SMA_PERIOD + 5
-    )
-
-    if rates is None or len(rates) < LOOKBACK_CANDLES + SMA_PERIOD:
-        return None
-
-    df = pd.DataFrame(rates).iloc[:-1]
-
-    df["SMA"] = df["close"].rolling(SMA_PERIOD).mean()
-
-    df["STD"] = df["close"].rolling(SMA_PERIOD).std()
-
-    df["Range"] = 4 * df["STD"]
-
-    cur = df.iloc[-1]
-
-    rs = df["Range"].iloc[-LOOKBACK_CANDLES:]
-
-    return {
-
-        "SMA": round(float(cur["SMA"]), 6),
-
-        "UpperBand": round(
-            float(cur["SMA"] + 2 * cur["STD"]),
-            6
-        ),
-
-        "LowerBand": round(
-            float(cur["SMA"] - 2 * cur["STD"]),
-            6
-        ),
-
-        "CurrentRange": round(
-            float(cur["Range"]),
-            6
-        ),
-
-        "MaxRange": round(
-            float(rs.max()),
-            6
-        ),
-
-        "MinRange": round(
-            float(rs.min()),
-            6
-        ),
-
-        "LastClosedTime": str(
-            datetime.fromtimestamp(cur["time"])
-        ),
-    }
-
-
-def _bollinger_engine(
-    symbols,
-    output,
-    lock,
-    stop,
-    label
-):
-
-    print(f"[{label}] started")
-
-    while not stop.is_set():
-
-        ensure_mt5()
-
-        tmp = {}
-
-        for sym in symbols:
-
-            tmp[sym] = {}
-
-            for tf_name, tf in TF_DICT.items():
-
-                r = _calc_bollinger(sym, tf)
-
-                if r:
-                    tmp[sym][tf_name] = r
-
-        with lock:
-
-            output["timestamp"] = str(datetime.utcnow())
-
-            output["data"] = tmp
-
-        print(f"[{label}] updated")
-
-        stop.wait(UPDATE_INTERVAL)
 
 
 # ==============================================================
 # MA ENGINE
 # ==============================================================
 
-ma_gen_lock = threading.Lock()
-ma_gen_stop = threading.Event()
-ma_gen_results = []
-
-ma_jpy_lock = threading.Lock()
-ma_jpy_stop = threading.Event()
-ma_jpy_results = []
+ma_lock = threading.Lock()
+ma_stop = threading.Event()
+ma_results = []
 
 
 def _ma_signal(s21, prev_s21, sma_x):
-
     if pd.isna(s21) or pd.isna(prev_s21) or pd.isna(sma_x) or sma_x == 0:
         return "NA"
 
     diff = s21 - sma_x
-
     abs_rel_diff = abs(diff / sma_x)
 
     if abs_rel_diff < MA_THRESHOLD:
-
         if diff > 0 and s21 > prev_s21:
             return 1
-
         if diff < 0 and s21 < prev_s21:
-            return 1
+            return -1
 
     return "NA"
 
 
 def _get_ma_signals(symbols):
-
     results = []
+    tf_name = "15m"
+    tf = mt5.TIMEFRAME_M15
 
     for sym in symbols:
+        if not mt5.symbol_select(sym, True):
+            continue
 
-        for tf_name, tf in TF_DICT.items():
+        rates = mt5.copy_rates_from_pos(
+            sym,
+            tf,
+            0,
+            MA_CANDLES + 1
+        )
 
-            if not mt5.symbol_select(sym, True):
-                continue
-
-            rates = mt5.copy_rates_from_pos(
-                sym,
-                tf,
-                0,
-                MA_CANDLES + 1
-            )
-
-            if rates is None or len(rates) < MA_CANDLES:
-
-                results.append({
-
-                    "Symbol": sym,
-
-                    "Timeframe": tf_name,
-
-                    "SMA50_Signal": "NA",
-
-                    "SMA100_Signal": "NA",
-
-                    "SMA200_Signal": "NA",
-
-                    "Error": "Insufficient Data",
-                })
-
-                continue
-
-            df = pd.DataFrame(rates)
-
-            df["time"] = pd.to_datetime(
-                df["time"],
-                unit="s"
-            )
-
-            df["SMA21"] = (
-                df["close"].rolling(21).mean()
-            )
-
-            df["SMA50"] = (
-                df["close"].rolling(50).mean()
-            )
-
-            df["SMA100"] = (
-                df["close"].rolling(100).mean()
-            )
-
-            df["SMA200"] = (
-                df["close"].rolling(200).mean()
-            )
-
-            closed = df.iloc[-2]
-            prev_s21 = df.iloc[-3]["SMA21"]
-
-            s21 = closed["SMA21"]
-
+        if rates is None or len(rates) < MA_CANDLES:
             results.append({
-
                 "Symbol": sym,
-
                 "Timeframe": tf_name,
-
-                "SMA50_Signal": _ma_signal(
-                    s21,
-                    prev_s21,
-                    closed["SMA50"]
-                ),
-
-                "SMA100_Signal": _ma_signal(
-                    s21,
-                    prev_s21,
-                    closed["SMA100"]
-                ),
-
-                "SMA200_Signal": _ma_signal(
-                    s21,
-                    prev_s21,
-                    closed["SMA200"]
-                ),
-
-                "Last Close": round(
-                    float(closed["close"]),
-                    5
-                ),
-
-                "Time": closed["time"].strftime(
-                    "%Y-%m-%d %H:%M"
-                ),
+                "SMA50_Signal": "NA",
+                "SMA100_Signal": "NA",
+                "SMA200_Signal": "NA",
+                "Error": "Insufficient Data",
             })
+            continue
+
+        df = pd.DataFrame(rates)
+        df["time"] = pd.to_datetime(
+            df["time"],
+            unit="s"
+        )
+
+        df["SMA21"] = (
+            df["close"].rolling(21).mean()
+        )
+        df["SMA50"] = (
+            df["close"].rolling(50).mean()
+        )
+        df["SMA100"] = (
+            df["close"].rolling(100).mean()
+        )
+        df["SMA200"] = (
+            df["close"].rolling(200).mean()
+        )
+
+        closed = df.iloc[-2]
+        prev_s21 = df.iloc[-3]["SMA21"]
+        s21 = closed["SMA21"]
+
+        results.append({
+            "Symbol": sym,
+            "Timeframe": tf_name,
+            "SMA50_Signal": _ma_signal(
+                s21,
+                prev_s21,
+                closed["SMA50"]
+            ),
+            "SMA100_Signal": _ma_signal(
+                s21,
+                prev_s21,
+                closed["SMA100"]
+            ),
+            "SMA200_Signal": _ma_signal(
+                s21,
+                prev_s21,
+                closed["SMA200"]
+            ),
+            "Last Close": round(
+                float(closed["close"]),
+                5
+            ),
+            "Time": closed["time"].strftime(
+                "%Y-%m-%d %H:%M"
+            ),
+        })
 
     return results
 
 
-def _ma_engine(
-    symbols,
-    results,
-    lock,
-    stop,
-    label
-):
-
+def _ma_engine(symbols, results, lock, stop, label):
     print(f"[{label}] started")
 
     while not stop.is_set():
-
         ensure_mt5()
-
-        data = _get_ma_signals(symbols)
-
-        with lock:
-
-            results.clear()
-
-            results.extend(data)
+        try:
+            data = _get_ma_signals(symbols)
+            with lock:
+                results.clear()
+                results.extend(data)
+        except Exception as e:
+            print(f"[{label}] Error updating MA signals: {e}")
 
         print(f"[{label}] updated")
-
         time.sleep(UPDATE_INTERVAL)
 
 
@@ -788,122 +584,53 @@ _all_threads = []
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
     initialize_mt5()
 
     threads_cfg = [
-
         (
-            fib_gen_stop,
+            fib_stop,
             _fib_engine,
             (
-                FIB_GEN_SYMS,
-                fib_gen_output,
-                fib_gen_lock,
-                fib_gen_stop,
-                "FIB-GEN",
+                ALL_SYMBOLS,
+                fib_output,
+                fib_lock,
+                fib_stop,
+                "FIB-ALL",
             ),
         ),
-
         (
-            fib_jpy_stop,
-            _fib_engine,
-            (
-                FIB_JPY_SYMS,
-                fib_jpy_output,
-                fib_jpy_lock,
-                fib_jpy_stop,
-                "FIB-JPY",
-            ),
-        ),
-
-        (
-            rsi_gen_stop,
+            rsi_stop,
             _rsi_engine,
             (
-                FIB_GEN_SYMS,
-                rsi_gen_lock,
-                rsi_gen_results,
-                rsi_gen_ob_os,
-                rsi_gen_stop,
-                "RSI-GEN",
+                ALL_SYMBOLS,
+                rsi_lock,
+                rsi_results,
+                rsi_ob_os,
+                rsi_stop,
+                "RSI-ALL",
             ),
         ),
-
         (
-            rsi_jpy_stop,
-            _rsi_engine,
-            (
-                FIB_JPY_SYMS,
-                rsi_jpy_lock,
-                rsi_jpy_results,
-                rsi_jpy_ob_os,
-                rsi_jpy_stop,
-                "RSI-JPY",
-            ),
-        ),
-
-        (
-            boll_gen_stop,
-            _bollinger_engine,
-            (
-                FIB_GEN_SYMS,
-                boll_gen_output,
-                boll_gen_lock,
-                boll_gen_stop,
-                "BOLL-GEN",
-            ),
-        ),
-
-        (
-            boll_jpy_stop,
-            _bollinger_engine,
-            (
-                FIB_JPY_SYMS,
-                boll_jpy_output,
-                boll_jpy_lock,
-                boll_jpy_stop,
-                "BOLL-JPY",
-            ),
-        ),
-
-        (
-            ma_gen_stop,
+            ma_stop,
             _ma_engine,
             (
-                FIB_GEN_SYMS,
-                ma_gen_results,
-                ma_gen_lock,
-                ma_gen_stop,
-                "MA-GEN",
-            ),
-        ),
-
-        (
-            ma_jpy_stop,
-            _ma_engine,
-            (
-                FIB_JPY_SYMS,
-                ma_jpy_results,
-                ma_jpy_lock,
-                ma_jpy_stop,
-                "MA-JPY",
+                ALL_SYMBOLS,
+                ma_results,
+                ma_lock,
+                ma_stop,
+                "MA-ALL",
             ),
         ),
     ]
 
     for stop_ev, fn, args in threads_cfg:
-
         stop_ev.clear()
-
         t = threading.Thread(
             target=fn,
             args=args,
             daemon=True
         )
-
         t.start()
-
         _all_threads.append((stop_ev, t))
 
     yield
@@ -915,7 +642,6 @@ async def lifespan(app: FastAPI):
         t.join(timeout=5)
 
     mt5.shutdown()
-
     print("🔴 MT5 shutdown")
 
 
@@ -924,29 +650,23 @@ async def lifespan(app: FastAPI):
 # ==============================================================
 
 app = FastAPI(
-
     title="Orivis Alpha – Combined Engine API",
-
     version="1.0.0",
-
     description="""
     Institutional-grade Forex Analytics API powered by MetaTrader5.
 
     Features:
-    - Fibonacci trend engine
-    - RSI analytics engine
+    - Fibonacci trend engine (15m)
+    - RSI analytics engine (1h)
     - Overbought/Oversold detection
-    - Bollinger volatility engine
-    - Moving average signal engine
+    - Moving average signal engine (15m)
     """,
-
     servers=[
         {
             "url": "http://74.208.190.247:8000",
             "description": "Production VPS Server"
         }
     ],
-
     lifespan=lifespan
 )
 
@@ -969,7 +689,6 @@ app.add_middleware(
     response_model=HealthResponse,
 )
 def health():
-
     return {
         "status": "running",
         "mt5_connected": bool(mt5.terminal_info()),
@@ -981,42 +700,20 @@ def health():
 # ==============================================================
 
 @app.get(
-    "/fib-gen/signal",
+    "/fib/signal",
     tags=["Fibonacci"],
-    summary="Get Fibonacci signals for GEN forex pairs",
+    summary="Get Fibonacci signals for all forex pairs",
 )
-def fib_gen_signal():
-
-    with fib_gen_lock:
-
+def fib_signal():
+    with fib_lock:
         return {
             "status": (
                 "ok"
-                if fib_gen_output["table"]
+                if fib_output["table"]
                 else "warming_up"
             ),
-            "timestamp": fib_gen_output["timestamp"],
-            "table": fib_gen_output["table"],
-        }
-
-
-@app.get(
-    "/fib-jpy/signal",
-    tags=["Fibonacci"],
-    summary="Get Fibonacci signals for JPY forex pairs",
-)
-def fib_jpy_signal():
-
-    with fib_jpy_lock:
-
-        return {
-            "status": (
-                "ok"
-                if fib_jpy_output["table"]
-                else "warming_up"
-            ),
-            "timestamp": fib_jpy_output["timestamp"],
-            "table": fib_jpy_output["table"],
+            "timestamp": fib_output["timestamp"],
+            "table": fib_output["table"],
         }
 
 
@@ -1025,109 +722,31 @@ def fib_jpy_signal():
 # ==============================================================
 
 @app.get(
-    "/rsi-gen/rsi",
+    "/rsi/rsi",
     tags=["RSI"],
-    summary="Get RSI analytics for GEN forex pairs",
+    summary="Get RSI analytics for all forex pairs",
 )
-def rsi_gen_get():
-
-    with rsi_gen_lock:
-
+def rsi_get():
+    with rsi_lock:
         return {
             "timestamp": datetime.now(),
-            "data": rsi_gen_results,
+            "data": rsi_results,
         }
 
 
 @app.get(
-    "/rsi-gen/rsi-ob-os",
+    "/rsi/rsi-ob-os",
     tags=["RSI"],
-    summary="Get RSI overbought and oversold signals for GEN pairs",
+    summary="Get RSI overbought and oversold signals for all pairs",
 )
-def rsi_gen_obos():
-
-    with rsi_gen_lock:
-
+def rsi_obos():
+    with rsi_lock:
         return {
             "timestamp": datetime.now(),
             "overbought_threshold": RSI_OVERBOUGHT,
             "oversold_threshold": RSI_OVERSOLD,
-            "data": rsi_gen_ob_os,
+            "data": rsi_ob_os,
         }
-
-
-@app.get(
-    "/rsi-jpy/rsi",
-    tags=["RSI"],
-    summary="Get RSI analytics for JPY forex pairs",
-)
-def rsi_jpy_get():
-
-    with rsi_jpy_lock:
-
-        return {
-            "timestamp": datetime.now(),
-            "data": rsi_jpy_results,
-        }
-
-
-@app.get(
-    "/rsi-jpy/rsi-ob-os",
-    tags=["RSI"],
-    summary="Get RSI overbought and oversold signals for JPY pairs",
-)
-def rsi_jpy_obos():
-
-    with rsi_jpy_lock:
-
-        return {
-            "timestamp": datetime.now(),
-            "overbought_threshold": RSI_OVERBOUGHT,
-            "oversold_threshold": RSI_OVERSOLD,
-            "data": rsi_jpy_ob_os,
-        }
-
-
-# ==============================================================
-# BOLLINGER
-# ==============================================================
-
-@app.get(
-    "/bollinger-gen/bollinger",
-    tags=["Bollinger"],
-    summary="Get Bollinger Band analytics for GEN forex pairs",
-)
-def boll_gen_get():
-
-    with boll_gen_lock:
-
-        if not boll_gen_output["data"]:
-
-            raise HTTPException(
-                status_code=503,
-                detail="Data not ready"
-            )
-
-        return boll_gen_output
-
-
-@app.get(
-    "/bollinger-jpy/bollinger",
-    tags=["Bollinger"],
-    summary="Get Bollinger Band analytics for JPY forex pairs",
-)
-def boll_jpy_get():
-
-    with boll_jpy_lock:
-
-        if not boll_jpy_output["data"]:
-
-            raise HTTPException(
-                status_code=503,
-                detail="Data not ready"
-            )
-
-        return boll_jpy_output
 
 
 # ==============================================================
@@ -1135,33 +754,177 @@ def boll_jpy_get():
 # ==============================================================
 
 @app.get(
-    "/ma-gen/signals",
+    "/ma/signals",
     tags=["Moving Average"],
-    summary="Get moving average crossover signals for GEN forex pairs",
+    summary="Get moving average crossover signals for all forex pairs",
 )
-def ma_gen_get():
-
-    with ma_gen_lock:
-
+def ma_get():
+    with ma_lock:
         return {
             "status": "success",
-            "data": ma_gen_results,
+            "data": ma_results,
         }
 
+
+# ==============================================================
+# PROBABILITY SCORE
+# ==============================================================
 
 @app.get(
-    "/ma-jpy/signals",
-    tags=["Moving Average"],
-    summary="Get moving average crossover signals for JPY forex pairs",
+    "/probability/score",
+    tags=["Probability Score"],
+    summary="Get combined probability score for symbols with active Fib 2, 3, or 4 levels",
 )
-def ma_jpy_get():
+def probability_score():
+    with fib_lock:
+        fib_table = list(fib_output.get("table", []))
+    with rsi_lock:
+        rsi_list = list(rsi_results)
+    with ma_lock:
+        ma_list = list(ma_results)
 
-    with ma_jpy_lock:
+    def normalize_symbol(sym: str) -> str:
+        if not sym:
+            return ""
+        return sym.replace("m", "").upper()
 
-        return {
-            "status": "success",
-            "data": ma_jpy_results,
-        }
+    rsi_map = {normalize_symbol(item.get("symbol", "")): item for item in rsi_list if "symbol" in item}
+    ma_map = {normalize_symbol(item.get("Symbol", "")): item for item in ma_list if "Symbol" in item}
+
+    results = []
+
+    for row in fib_table:
+        sym = row.get("Symbol", "")
+        norm_sym = normalize_symbol(sym)
+        
+        fib2_active = row.get("Fib2") == 1
+        fib3_active = row.get("Fib3") == 1
+        fib4_active = row.get("Fib4") == 1
+        trend_dir = row.get("TrendDirection")
+
+        # Select symbols where Fib 2, 3, or 4 is active and trend direction is present
+        if trend_dir in ("Uptrend", "Downtrend") and (fib2_active or fib3_active or fib4_active):
+            # Calculate Fib score
+            fib_score = 0
+            active_fib = None
+            if fib2_active:
+                fib_score = 70
+                active_fib = "Fib2"
+            elif fib3_active:
+                fib_score = 80
+                active_fib = "Fib3"
+            elif fib4_active:
+                fib_score = 70
+                active_fib = "Fib4"
+
+            # Calculate RSI score
+            rsi_score = 0
+            rsi_val = None
+            rsi_item = rsi_map.get(norm_sym)
+            if rsi_item is not None:
+                rsi_val = rsi_item.get("RSI")
+                if rsi_val is not None:
+                    if trend_dir == "Downtrend":
+                        if rsi_val < 20:
+                            rsi_score = 100
+                        elif 60 <= rsi_val <= 70:
+                            rsi_score = 70
+                        elif 70 < rsi_val <= 75:
+                            rsi_score = 80
+                        elif 75 < rsi_val <= 80:
+                            rsi_score = 90
+                    elif trend_dir == "Uptrend":
+                        if rsi_val > 80:
+                            rsi_score = 100
+                        elif 30 <= rsi_val <= 40:
+                            rsi_score = 70
+                        elif 25 <= rsi_val < 30:
+                            rsi_score = 80
+                        elif 20 <= rsi_val < 25:
+                            rsi_score = 90
+
+            # Calculate SMA score
+            sma_score = 0
+            sig50 = "NA"
+            sig100 = "NA"
+            sig200 = "NA"
+            ma_item = ma_map.get(norm_sym)
+            if ma_item is not None:
+                sig50 = ma_item.get("SMA50_Signal", "NA")
+                sig100 = ma_item.get("SMA100_Signal", "NA")
+                sig200 = ma_item.get("SMA200_Signal", "NA")
+
+                active_smas = []
+                if sig50 in (1, -1, "1", "-1"):
+                    active_smas.append("SMA50")
+                if sig100 in (1, -1, "1", "-1"):
+                    active_smas.append("SMA100")
+                if sig200 in (1, -1, "1", "-1"):
+                    active_smas.append("SMA200")
+
+                if len(active_smas) > 1:
+                    # Active simultaneously for multiple levels
+                    sma_score = 70
+                elif len(active_smas) == 1:
+                    level = active_smas[0]
+                    if level == "SMA50":
+                        sma_score = 70
+                    elif level == "SMA100":
+                        sma_score = 90
+                    elif level == "SMA200":
+                        sma_score = 70
+
+            # Calculate total score
+            total_score = round(0.33 * fib_score + 0.33 * rsi_score + 0.33 * sma_score, 2)
+
+            trade_dir = "Potential Downside" if trend_dir == "Uptrend" else "Potential Upside"
+            item = {
+                "Symbol": sym,
+                "trade_direction": trade_dir,
+                "ActiveFibLevel": active_fib,
+                "FibScore": fib_score,
+                "RSI_Value": rsi_val,
+                "RSIScore": rsi_score,
+                "SMA50_Signal": sig50,
+                "SMA100_Signal": sig100,
+                "SMA200_Signal": sig200,
+                "SMAScore": sma_score,
+                "TotalScore": total_score
+            }
+
+            # If score is > 50 and specific RSI/trend conditions are met, calculate and display trade parameters
+            should_display_trade = False
+            if total_score > 50 and rsi_val is not None:
+                if trend_dir == "Downtrend" and (60 < rsi_val <= 80 or rsi_val < 20):
+                    should_display_trade = True
+                elif trend_dir == "Uptrend" and (20 < rsi_val < 40 or rsi_val > 80):
+                    should_display_trade = True
+
+            if should_display_trade:
+                fib_n_price = row.get("SignalLevelPrice")
+                fib_n_plus_1_price = row.get("Fib_n_plus_1_Price")
+
+                if fib_n_price is not None and fib_n_plus_1_price is not None:
+                    item["EntryPrice"] = round(fib_n_price, 5)
+                    if trend_dir == "Downtrend":
+                        tp = fib_n_plus_1_price + 0.0003 * fib_n_price
+                        sl = fib_n_price - (tp - fib_n_price) * 0.8
+                    else:  # Uptrend
+                        tp = fib_n_plus_1_price - 0.0003 * fib_n_price
+                        sl = fib_n_price + (fib_n_price - tp) * 0.8
+
+                    item["TargetProfit"] = round(tp, 5)
+                    item["StopLoss"] = round(sl, 5)
+
+                # Only include items that meet the final display criteria
+                results.append(item)
+
+    return {
+        "status": "success",
+        "timestamp": datetime.now(),
+        "count": len(results),
+        "data": results
+    }
 
 
 # ==============================================================
@@ -1169,7 +932,6 @@ def ma_jpy_get():
 # ==============================================================
 
 if __name__ == "__main__":
-
     uvicorn.run(
         app,
         host="0.0.0.0",
